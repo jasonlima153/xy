@@ -7,6 +7,10 @@ static AVAudioPlayer *globalPulsePlayer = nil;
 static dispatch_source_t backgroundPulseTimer = nil;
 static dispatch_source_t reconnectPulseTimer = nil;
 
+// 前向声明：这两个函数在后面的 hook 中被调用，但定义在文件后部
+void ExecuteAudioCpuPulse(void);
+void StartReconnectGuard(void);
+
 // ============================================================================
 // 1. UTDID 动态离散哈希化（解决服务器同标识风控与互踢）
 // ============================================================================
