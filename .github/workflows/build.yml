@@ -32,18 +32,28 @@ jobs:
         echo "[*] Building XianYuMultiPushTweak..."
         export THEOS=${{ github.workspace }}/theos
         export PATH="$(brew --prefix make)/libexec/gnubin:$PATH"
-        make clean
-        make package
+        make clean || true
+        make package FINALPACKAGE=1
         ls -la packages/
+      continue-on-error: false
+      
+    - name: Debug on failure
+      if: failure()
+      run: |
+        echo "=== Debug Info ==="
+        ls -la XianYuMultiPushTweak/
+        ls -la XianYuMultiPushTweak/packages/ 2>/dev/null || echo "No packages dir"
+        cat XianYuMultiPushTweak/Makefile
         
     - name: Upload build artifacts
+      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: XianYuMultiPushTweak-deb
         path: XianYuMultiPushTweak/packages/*.deb
         
     - name: Create Release
-      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push' && success()
       uses: softprops/action-gh-release@v1
       with:
         tag_name: v${{ github.run_number }}
