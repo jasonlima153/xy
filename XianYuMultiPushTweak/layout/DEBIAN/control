@@ -1,0 +1,11 @@
+Package: com.xianyu.multi.push.tweak
+Name: XianYu Multi Push Tweak
+Depends: mobilesubstrate
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Industrial-grade multi-instance push keep-alive tweak for XianYu (IdleFish) iOS app. Features UTDID discretization, 25s audio pulse background keep-alive, Keychain isolation bypass, and kickout command interception.
+Maintainer: jasonlima153
+Author: jasonlima153
+Section: Tweaks
+Priority: optional
+Homepage: https://github.com/jasonlima153/xy
