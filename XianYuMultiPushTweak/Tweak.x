@@ -63,19 +63,17 @@ void StartPermanentAudioKeeper() {
         // 延迟 1 秒，避开内核网络切换引起的崩溃冲突
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             // 越过所有 OC 业务检测，直接调用底层初始化和 Bind 流程
-            id accsMgr = [NSClassFromString(@"TBAccsManager") performSelector:@selector(sharedInstance)];
-            if (!accsMgr) {
-                accsMgr = [NSClassFromString(@"TBAccsManager") alloc];
-                accsMgr = [accsMgr performSelector:@selector(init)];
+            Class tbAccsClass = NSClassFromString(@"TBAccsManager");
+            id accsMgr = nil;
+            if (tbAccsClass && [tbAccsClass respondsToSelector:@selector(sharedInstance)]) {
+                accsMgr = [tbAccsClass sharedInstance];
             }
 
-            if (accsMgr) {
-                // 强制重新执行应用与服务器握手
-                NSLog(@"[XianYu-Final] 强行触发底层 Accs Bind Operation");
-                id fmAccs = [NSClassFromString(@"FMAccsManager") performSelector:@selector(sharedManager)];
-                if ([fmAccs respondsToSelector:@selector(reconnectIfNeeded)]) {
-                    [fmAccs performSelector:@selector(reconnectIfNeeded)];
-                }
+            // 强制重新执行应用与服务器握手
+            NSLog(@"[XianYu-Final] 强行触发底层 Accs Bind Operation");
+            id fmAccs = [NSClassFromString(@"FMAccsManager") performSelector:@selector(sharedManager)];
+            if ([fmAccs respondsToSelector:@selector(reconnectIfNeeded)]) {
+                [fmAccs performSelector:@selector(reconnectIfNeeded)];
             }
         });
     }
