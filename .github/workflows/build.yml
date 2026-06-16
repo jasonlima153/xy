@@ -16,22 +16,18 @@ jobs:
       uses: actions/checkout@v4
       
     - name: Setup Theos
-      run: |
-        echo "[*] Installing Theos..."
-        bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
-        echo "THEOS=/Users/runner/theos" >> $GITHUB_ENV
-        echo "PATH=/Users/runner/theos/bin:$PATH" >> $GITHUB_ENV
-        
-    - name: Setup iOS SDK
-      run: |
-        echo "[*] Setting up iOS SDK..."
-        sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-        xcodebuild -version
+      uses: Randomblock1/theos-action@v1
+      with:
+        theos-dir: 'theos'
+        theos-src: 'https://github.com/theos/theos'
+        theos-sdks: 'https://github.com/theos/sdks'
+        orion: 'false'
         
     - name: Build Tweak
       run: |
         cd XianYuMultiPushTweak
         echo "[*] Building XianYuMultiPushTweak..."
+        export THEOS=../theos
         make clean
         make package
         ls -la packages/
