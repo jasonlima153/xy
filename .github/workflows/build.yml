@@ -1,0 +1,57 @@
+name: Build XianYu Multi Push Tweak
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Setup Theos
+      run: |
+        echo "[*] Installing Theos..."
+        bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+        echo "THEOS=/Users/runner/theos" >> $GITHUB_ENV
+        echo "PATH=/Users/runner/theos/bin:$PATH" >> $GITHUB_ENV
+        
+    - name: Setup iOS SDK
+      run: |
+        echo "[*] Setting up iOS SDK..."
+        sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+        xcodebuild -version
+        
+    - name: Build Tweak
+      run: |
+        cd XianYuMultiPushTweak
+        echo "[*] Building XianYuMultiPushTweak..."
+        make clean
+        make package
+        ls -la packages/
+        
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: XianYuMultiPushTweak-deb
+        path: XianYuMultiPushTweak/packages/*.deb
+        
+    - name: Create Release
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ github.run_number }}
+        name: Release v${{ github.run_number }}
+        body: |
+          Automated build of XianYu Multi Push Tweak
+          - Commit: ${{ github.sha }}
+          - Branch: ${{ github.ref_name }}
+        files: XianYuMultiPushTweak/packages/*.deb
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
