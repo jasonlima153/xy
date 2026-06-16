@@ -11,6 +11,10 @@ env:
   HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+permissions:
+  contents: write
+  actions: read
+  
 jobs:
   build:
     runs-on: macos-latest
@@ -54,7 +58,7 @@ jobs:
         
     - name: Create Release
       if: github.ref == 'refs/heads/main' && github.event_name == 'push' && success()
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: v${{ github.run_number }}
         name: Release v${{ github.run_number }}
