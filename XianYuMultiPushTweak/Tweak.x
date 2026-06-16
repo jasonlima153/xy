@@ -4,55 +4,99 @@
 #import <dlfcn.h>
 
 static AVAudioPlayer *ultimateAudioPlayer = nil;
+static dispatch_source_t highFrequencyTimer = nil;
 
 // ============================================================================
-// 1. 【完美修复】高性能 C 级调用源过滤（彻底根治 EXC_BAD_ACCESS 闪退）
+// 1. 高性能 C 级调用源过滤（保持包名伪装，放行系统通知中心）
 // ============================================================================
 %hook NSBundle
-
 - (NSString *)bundleIdentifier {
-    NSString *realBundleID = %orig; // 拿到重签后的真实包名 (例如 com.taobao.fleamarket1)
-
-    // 如果是原版，直接放行
+    NSString *realBundleID = %orig;
     if ([realBundleID isEqualToString:@"com.taobao.fleamarket"]) {
         return realBundleID;
     }
 
-    // 极致性能：获取是谁在调用 [NSBundle bundleIdentifier] 的上层 C 函数返回地址
     void *returnAddress = __builtin_return_address(0);
-    if (returnAddress == NULL) {
-        return realBundleID;
-    }
+    if (returnAddress == NULL) return realBundleID;
 
-    // 使用 dladdr 反查该内存地址究竟属于哪个动态库（Image）
     Dl_info info;
     if (dladdr(returnAddress, &info) != 0 && info.dli_fname != NULL) {
         NSString *callerImage = [NSString stringWithUTF8String:info.dli_fname];
 
-        // 核心判定：只有当调用者来自于阿里的安全加固组件或者网络组件时，我们才返回官方原包名欺骗它！
         if ([callerImage containsString:@"SecurityGuard"] ||
             [callerImage containsString:@"SGMain"] ||
             [callerImage containsString:@"Tnet"] ||
-            [callerImage containsString:@"Runner.app/Runner"]) { // 阿里 C++ 库静态链接在 Runner 主程序内
+            [callerImage containsString:@"Runner.app/Runner"]) {
 
-            // 排除苹果系统层和通知中心的调用，防止 Identity Mismatch 导致的通知消失
             if (![callerImage containsString:@"/System/Library/"] &&
                 ![callerImage containsString:@"/usr/lib/"]) {
-
-                // 成功欺骗阿里加固与长连接，打破4秒断流
                 return @"com.taobao.fleamarket";
             }
         }
     }
-
-    // 其余所有情况（系统弹窗、通知中心、UIKit）一律老老实实交出真实包名，确保通知正常弹出
     return realBundleID;
 }
-
 %end
 
 // ============================================================================
-// 2. UTDID 离散化与全天候音频常驻（与前方案保持一致）
+// 2. 【核心绝杀】重写 FMAccsManager 生命周期，阻止底层 Tnet 进入后台挂起状态
+// ============================================================================
+%hook FMAccsManager
+
+- (void)applicationDidEnterBackground {
+    // 1. 绝对不调用 %orig
+    // 斩断闲鱼官方业务层主动向 C++ Tnet 网络库下发的"进入后台"指令
+    NSLog(@"[XianYu-Perfect] 成功斩断官方业务层后台断连信号！");
+
+    // 2. 立即激活常驻无声音频守卫
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (ultimateAudioPlayer && ultimateAudioPlayer.isPlaying) return;
+
+        char silenceBuf[512] = {0};
+        NSData *silentData = [NSData dataWithBytes:silenceBuf length:512];
+        ultimateAudioPlayer = [[AVAudioPlayer alloc] initWithData:silentData error:nil];
+        ultimateAudioPlayer.numberOfLoops = -1;
+        ultimateAudioPlayer.volume = 0.01;
+
+        [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback
+                                         withOptions:AVAudioSessionCategoryOptionMixWithOthers error:nil];
+        [[AVAudioSession sharedInstance] setActive:YES error:nil];
+        [ultimateAudioPlayer play];
+
+        // 3. 建立 3 秒高频强拉状态机（硬撼 4 秒断流魔咒）
+        if (highFrequencyTimer == nil) {
+            highFrequencyTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0));
+            dispatch_source_set_timer(highFrequencyTimer, dispatch_time(DISPATCH_TIME_NOW, 0), 3 * NSEC_PER_SEC, 0 * NSEC_PER_SEC);
+
+            dispatch_source_set_event_handler(highFrequencyTimer, ^{
+                @autoreleasepool {
+                    id manager = [NSClassFromString(@"FMAccsManager") performSelector:@selector(sharedManager)];
+                    if (manager && [manager respondsToSelector:@selector(reconnectIfNeeded)]) {
+                        NSLog(@"[XianYu-Perfect] 后台 3 秒高频脉冲：强行重载 ACCS 底层 TCP 通道！");
+                        [manager performSelector:@selector(reconnectIfNeeded)];
+                    }
+                }
+            });
+            dispatch_resume(highFrequencyTimer);
+        }
+    });
+}
+
+- (void)applicationWillEnterForeground {
+    %orig;
+    if (highFrequencyTimer) {
+        dispatch_source_cancel(highFrequencyTimer);
+        highFrequencyTimer = nil;
+    }
+    if (ultimateAudioPlayer) {
+        [ultimateAudioPlayer stop];
+    }
+    [[AVAudioSession sharedInstance] setActive:NO error:nil];
+}
+%end
+
+// ============================================================================
+// 3. UTDID 动态离散、Keychain 降维沙盒与防踢
 // ============================================================================
 %hook UTDIDIphoneSDK
 + (NSString *)getUtdid {
@@ -62,26 +106,6 @@ static AVAudioPlayer *ultimateAudioPlayer = nil;
         return [NSString stringWithFormat:@"%@M2B=", prefix];
     }
     return originalUtdid;
-}
-%end
-
-void StartUltimateAudioKeeper() {
-    if (ultimateAudioPlayer && ultimateAudioPlayer.isPlaying) return;
-    char silenceBuf[512] = {0};
-    NSData *silentData = [NSData dataWithBytes:silenceBuf length:512];
-    ultimateAudioPlayer = [[AVAudioPlayer alloc] initWithData:silentData error:nil];
-    ultimateAudioPlayer.numberOfLoops = -1;
-    ultimateAudioPlayer.volume = 0.01;
-    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:nil];
-    [[AVAudioSession sharedInstance] setActive:YES error:nil];
-    [ultimateAudioPlayer play];
-}
-
-%hook FMAccsManager
-- (void)applicationDidEnterBackground {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        StartUltimateAudioKeeper();
-    });
 }
 %end
 
