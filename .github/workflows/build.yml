@@ -7,6 +7,10 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+env:
+  HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: macos-latest
@@ -18,16 +22,16 @@ jobs:
     - name: Setup Theos
       uses: Randomblock1/theos-action@v1
       with:
-        theos-dir: 'theos'
+        theos-dir: '${{ github.workspace }}/theos'
         theos-src: 'https://github.com/theos/theos'
         theos-sdks: 'https://github.com/theos/sdks'
-        orion: 'false'
         
     - name: Build Tweak
       run: |
         cd XianYuMultiPushTweak
         echo "[*] Building XianYuMultiPushTweak..."
-        export THEOS=../theos
+        export THEOS=${{ github.workspace }}/theos
+        export PATH="$(brew --prefix make)/libexec/gnubin:$PATH"
         make clean
         make package
         ls -la packages/
