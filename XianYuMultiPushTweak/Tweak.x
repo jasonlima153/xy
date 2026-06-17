@@ -3,34 +3,38 @@
 #import <Security/Security.h>
 #import <dlfcn.h>
 
-static AVAudioPlayer *ultimateAudioPlayer = nil;
-static dispatch_source_t highFrequencyTimer = nil;
+// 全域达尔文跨进程通知的唯一标识（必须保持一致）
+#define kXianYuPushShareNotification "com.taobao.fleamarket.pushshare.pulse"
+
+static AVAudioPlayer *sharedHelperPlayer = nil;
 
 // ============================================================================
-// 1. 高性能 C 级调用源过滤（保持包名伪装，放行系统通知中心）
+// 1. 【核心伪装】高性能 C 级调用源过滤（解决自签改包名后 SecurityGuard 签名失败）
 // ============================================================================
 %hook NSBundle
 - (NSString *)bundleIdentifier {
     NSString *realBundleID = %orig;
+
+    // 如果是官方原版包名，直接放行
     if ([realBundleID isEqualToString:@"com.taobao.fleamarket"]) {
         return realBundleID;
     }
 
+    // 自签多开环境下，利用 dladdr 提取调用源，只欺骗阿里加固，不欺骗系统通知中心
     void *returnAddress = __builtin_return_address(0);
-    if (returnAddress == NULL) return realBundleID;
+    if (returnAddress != NULL) {
+        Dl_info info;
+        if (dladdr(returnAddress, &info) != 0 && info.dli_fname != NULL) {
+            NSString *callerImage = [NSString stringWithUTF8String:info.dli_fname];
 
-    Dl_info info;
-    if (dladdr(returnAddress, &info) != 0 && info.dli_fname != NULL) {
-        NSString *callerImage = [NSString stringWithUTF8String:info.dli_fname];
+            if ([callerImage containsString:@"SecurityGuard"] ||
+                [callerImage containsString:@"SGMain"] ||
+                [callerImage containsString:@"Tnet"] ||
+                [callerImage containsString:@"Runner.app/Runner"]) {
 
-        if ([callerImage containsString:@"SecurityGuard"] ||
-            [callerImage containsString:@"SGMain"] ||
-            [callerImage containsString:@"Tnet"] ||
-            [callerImage containsString:@"Runner.app/Runner"]) {
-
-            if (![callerImage containsString:@"/System/Library/"] &&
-                ![callerImage containsString:@"/usr/lib/"]) {
-                return @"com.taobao.fleamarket";
+                if (![callerImage containsString:@"/System/Library/"] && ![callerImage containsString:@"/usr/lib/"]) {
+                    return @"com.taobao.fleamarket";
+                }
             }
         }
     }
@@ -39,71 +43,80 @@ static dispatch_source_t highFrequencyTimer = nil;
 %end
 
 // ============================================================================
-// 2. 【核心绝杀】重写 FMAccsManager 生命周期，阻止底层 Tnet 进入后台挂起状态
+// 2. 【发送端逻辑】注入"官方正版"的角色：收到消息，全域广播
 // ============================================================================
-%hook FMAccsManager
+%hook TBAccsReceiveAndCallBackCenter
+- (void)didRecvAccsBuf:(id)buf {
+    %orig; // 让正版主号正常处理并弹出原生通知
 
-- (void)applicationDidEnterBackground {
-    // 1. 绝对不调用 %orig
-    // 斩断闲鱼官方业务层主动向 C++ Tnet 网络库下发的"进入后台"指令
-    NSLog(@"[XianYu-Perfect] 成功斩断官方业务层后台断连信号！");
-
-    // 2. 立即激活常驻无声音频守卫
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (ultimateAudioPlayer && ultimateAudioPlayer.isPlaying) return;
-
-        char silenceBuf[512] = {0};
-        NSData *silentData = [NSData dataWithBytes:silenceBuf length:512];
-        ultimateAudioPlayer = [[AVAudioPlayer alloc] initWithData:silentData error:nil];
-        ultimateAudioPlayer.numberOfLoops = -1;
-        ultimateAudioPlayer.volume = 0.01;
-
-        [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback
-                                         withOptions:AVAudioSessionCategoryOptionMixWithOthers error:nil];
-        [[AVAudioSession sharedInstance] setActive:YES error:nil];
-        [ultimateAudioPlayer play];
-
-        // 3. 建立 3 秒高频强拉状态机（硬撼 4 秒断流魔咒）
-        if (highFrequencyTimer == nil) {
-            highFrequencyTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0));
-            dispatch_source_set_timer(highFrequencyTimer, dispatch_time(DISPATCH_TIME_NOW, 0), 3 * NSEC_PER_SEC, 0 * NSEC_PER_SEC);
-
-            dispatch_source_set_event_handler(highFrequencyTimer, ^{
-                @autoreleasepool {
-                    id manager = [NSClassFromString(@"FMAccsManager") performSelector:@selector(sharedManager)];
-                    if (manager && [manager respondsToSelector:@selector(reconnectIfNeeded)]) {
-                        NSLog(@"[XianYu-Perfect] 后台 3 秒高频脉冲：强行重载 ACCS 底层 TCP 通道！");
-                        [manager performSelector:@selector(reconnectIfNeeded)];
-                    }
-                }
-            });
-            dispatch_resume(highFrequencyTimer);
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        NSString *currentBundle = [[NSBundle mainBundle] bundleIdentifier];
+        // 只有当前运行的是官方正版包时，才发射跨进程广播
+        if ([currentBundle isEqualToString:@"com.taobao.fleamarket"]) {
+            NSLog(@"[XianYu-Share] 正版基站端：长连接检测到新消息，正在向分身发射达尔文广播...");
+            CFNotificationCenterPostNotification(
+                CFNotificationCenterGetDarwinNotifyCenter(),
+                CFSTR(kXianYuPushShareNotification),
+                NULL,
+                NULL,
+                YES
+            );
         }
     });
-}
-
-- (void)applicationWillEnterForeground {
-    %orig;
-    if (highFrequencyTimer) {
-        dispatch_source_cancel(highFrequencyTimer);
-        highFrequencyTimer = nil;
-    }
-    if (ultimateAudioPlayer) {
-        [ultimateAudioPlayer stop];
-    }
-    [[AVAudioSession sharedInstance] setActive:NO error:nil];
 }
 %end
 
 // ============================================================================
-// 3. UTDID 动态离散、Keychain 降维沙盒与防踢
+// 3. 【接收端逻辑】注入"多开分身"的角色：接收广播，后台瞬间建连收信
+// ============================================================================
+static void OnPushSignalReceived(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    NSLog(@"[XianYu-Share] 分身哨兵端：成功捕获到基站引信！分身在后台被瞬间强行激活！");
+
+    @autoreleasepool {
+        // 1. 瞬间利用无声音频抢占 CPU 执行权，锁死网卡不被 iOS 内核挂起
+        if (!sharedHelperPlayer) {
+            char silenceBuf[256] = {0};
+            NSData *silentData = [NSData dataWithBytes:silenceBuf length:256];
+            sharedHelperPlayer = [[AVAudioPlayer alloc] initWithData:silentData error:nil];
+            sharedHelperPlayer.volume = 0.0;
+        }
+
+        [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback
+                                         withOptions:AVAudioSessionCategoryOptionMixWithOthers error:nil];
+        [[AVAudioSession sharedInstance] setActive:YES error:nil];
+        [sharedHelperPlayer play];
+
+        // 2. 在网卡被激活的黄金时间内，强制唤醒分身已死或断流的 C++ ACCS 通道
+        id manager = [NSClassFromString(@"FMAccsManager") performSelector:@selector(sharedManager)];
+        if (manager && [manager respondsToSelector:@selector(reconnectIfNeeded)]) {
+            NSLog(@"[XianYu-Share] 分身哨兵端：正在越级触发 reconnectIfNeeded 重载 TCP 管道收信...");
+            [manager performSelector:@selector(reconnectIfNeeded)];
+        }
+
+        // 3. 5 秒钟足够长连接把多开账号的所有新留言拉取完毕并弹窗，随后火速关闭音频，深睡眠待机
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (sharedHelperPlayer) {
+                [sharedHelperPlayer stop];
+            }
+            [[AVAudioSession sharedInstance] setActive:NO error:nil];
+            NSLog(@"[XianYu-Share] 分身哨兵端：收信结束，分身重新潜伏休眠。");
+        });
+    }
+}
+
+// ============================================================================
+// 4. 环境隔离与防互踢优化（Keychain 降维沙盒与 UTDID 动态离散）
 // ============================================================================
 %hook UTDIDIphoneSDK
 + (NSString *)getUtdid {
     NSString *originalUtdid = %orig;
-    if (originalUtdid && originalUtdid.length == 24) {
-        NSString *prefix = [originalUtdid substringToIndex:20];
-        return [NSString stringWithFormat:@"%@M2B=", prefix];
+    // 只有多开分身才修改 UTDID 尾部字符，确保官方原版和分身在服务器端 ClientID 不冲突
+    NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
+    if (![bundleId isEqualToString:@"com.taobao.fleamarket"]) {
+        if (originalUtdid && originalUtdid.length == 24) {
+            NSString *prefix = [originalUtdid substringToIndex:20];
+            return [NSString stringWithFormat:@"%@M2B=", prefix];
+        }
     }
     return originalUtdid;
 }
@@ -127,3 +140,23 @@ static dispatch_source_t highFrequencyTimer = nil;
     %orig;
 }
 %end
+
+// ============================================================================
+// 5. 初始化注册：如果是多开 App，向 iOS 内核订阅全域广播
+// ============================================================================
+%ctl (cerror = false);
+%init {
+    %init;
+    NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
+    if (![bundleId isEqualToString:@"com.taobao.fleamarket"]) {
+        NSLog(@"[XianYu-Share] 检测到多开分身环境，正在向 iOS 内核注册达尔文通知监听...");
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            NULL,
+            OnPushSignalReceived,
+            CFSTR(kXianYuPushShareNotification),
+            NULL,
+            CFNotificationSuspensionBehaviorDeliverImmediately
+        );
+    }
+}
