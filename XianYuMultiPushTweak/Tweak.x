@@ -144,9 +144,10 @@ static void OnPushSignalReceived(CFNotificationCenterRef center, void *observer,
 // ============================================================================
 // 5. 初始化注册：如果是多开 App，向 iOS 内核订阅全域广播
 // ============================================================================
-%ctl (cerror = false);
-%init {
-    %init;
+%hook UIApplication
+- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    BOOL result = %orig;
+
     NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
     if (![bundleId isEqualToString:@"com.taobao.fleamarket"]) {
         NSLog(@"[XianYu-Share] 检测到多开分身环境，正在向 iOS 内核注册达尔文通知监听...");
@@ -159,4 +160,7 @@ static void OnPushSignalReceived(CFNotificationCenterRef center, void *observer,
             CFNotificationSuspensionBehaviorDeliverImmediately
         );
     }
+
+    return result;
 }
+%end
